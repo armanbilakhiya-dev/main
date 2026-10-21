@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OS File Allocation Simulator</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f6f9; display: flex; justify-content: center; padding: 20px; }
+        .dashboard { display: flex; gap: 20px; max-width: 1250px; flex-wrap: wrap; }
+        .panel { background: white; border: 2px solid #2c3e50; border-radius: 8px; padding: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .panel-title { font-weight: bold; text-transform: uppercase; margin-bottom: 15px; color: #2c3e50; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        
+        /* Input Panel */
+        .input-group { margin-bottom: 15px; }
+        .input-group label { display: block; margin-bottom: 5px; font-size: 14px; }
+        .input-group input[type="text"], .input-group input[type="number"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        .radio-group { margin-bottom: 5px; }
+        button { background-color: #2c3e50; color: white; border: none; padding: 10px 15px; width: 100%; border-radius: 4px; cursor: pointer; font-weight: bold; margin-bottom: 10px;}
+        button:hover { background-color: #1a252f; }
+        .btn-danger { background-color: #e74c3c; }
+        .btn-danger:hover { background-color: #c0392b; }
+        .btn-delete { background-color: #e74c3c; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px; width: auto; margin-bottom: 0;}
+        .btn-delete:hover { background-color: #c0392b; }
+        
+        /* Disk Grid */
+        #disk-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; }
+        .block { width: 35px; height: 35px; display: flex; align-items: center; justify-content: center; border: 1px solid #999; font-size: 12px; transition: background-color 0.3s; }
+        
+        /* Legend Colors */
+        .free { background-color: white; color: black; }
+        .contiguous { background-color: #4CAF50; color: white; }
+        .index { background-color: #2196F3; color: white; }
+        .indexed-data { background-color: #FFC107; color: black; }
+        
+        /* Performance & Directory */
+        .perf-item { margin-bottom: 10px; font-size: 14px; }
+        .directory-list { max-height: 200px; overflow-y: auto; font-size: 13px; border: 1px solid #eee; padding: 5px; margin-top: 10px; }
+        .dir-entry { padding: 8px; border-bottom: 1px solid #f0f0f0; }
+        .dir-entry:last-child { border-bottom: none; }
+        
+        .legend { margin-top: 20px; font-size: 14px; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 5px; }
+        .legend-box { width: 15px; height: 15px; margin-right: 10px; border: 1px solid #999; }
+    </style>
+</head>
+<body>
+
+<div class="dashboard">
+    <!-- Input Panel -->
+    <div class="panel" style="width: 250px;">
+        <div class="panel-title">Input Panel</div>
+        <div class="input-group">
+            <label>File Name</label>
+            <input type="text" id="fileName" value="video.mp4">
+        </div>
+        <div class="input-group">
+            <label>File Size (blocks)</label>
+            <input type="number" id="fileSize" value="6" min="1">
+        </div>
+        <div class="input-group">
+            <label>Disk Size</label>
+            <input type="number" id="diskSize" value="64" readonly>
+        </div>
+        <div class="input-group">
+            <label>Allocation Method</label>
+            <div class="radio-group"><input type="radio" name="method" value="Contiguous" checked> Contiguous</div>
+            <div class="radio-group"><input type="radio" name="method" value="Indexed"> Indexed</div>
+        </div>
+        <button onclick="executeSimulation()">Execute Simulation</button>
+        <button class="btn-danger" onclick="resetDisk()">Reset All Disk</button>
+    </div>
+
+    <!-- Disk Block Visualization -->
+    <div class="panel" style="width: 350px;">
+        <div class="panel-title">Disk Block Visualization</div>
+        <div id="disk-grid"></div>
+    </div>
+
+    <!-- Performance & Directory -->
+    <div class="panel" style="width: 300px;">
+        <div class="panel-title">Performance</div>
+        
+        <!-- Re-integrated Performance Metrics -->
+        <div class="perf-item" id="perf-method">Method: -</div>
+        <div class="perf-item" id="perf-status" style="font-weight: bold;">Status: Waiting</div>
+        <div class="perf-item" id="perf-blocks">Blocks: -</div>
+        <div class="perf-item" id="perf-free">Free Blocks: 64</div>
+        <div class="perf-item" id="perf-frag">Fragmentation: -</div>
+        <div class="perf-item" id="perf-overhead">Overhead: -</div>
+        <div class="perf-item" id="perf-access">Access: -</div>
+        
+        <div style="margin-top: 15px; font-weight: bold; font-size: 14px; border-bottom: 1px solid #eee;">System Directory</div>
+        <div class="directory-list" id="system-directory">
+            <div style="color: #888; padding: 5px;">No files allocated yet.</div>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item"><div class="legend-box free"></div> Free block</div>
+            <div class="legend-item"><div class="legend-box contiguous"></div> Contiguous file data</div>
+            <div class="legend-item"><div class="legend-box index"></div> Index block</div>
+            <div class="legend-item"><div class="legend-box indexed-data"></div> Indexed/scattered data</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let diskSize = 64;
+    let disk = new Array(diskSize).fill(null);
+    let allocatedFiles = {};
+    let freeBlocksCount = diskSize;
+
+    function initGrid() {
+        const grid = document.getElementById('disk-grid');
+        grid.innerHTML = '';
+        for (let i = 0; i < diskSize; i++) {
+            const block = document.createElement('div');
+            block.className = 'block free';
+            block.id = 'block-' + i;
+            block.innerText = i;
+            grid.appendChild(block);
+        }
+    }
+
+    function resetDisk() {
+        disk = new Array(diskSize).fill(null);
+        allocatedFiles = {};
+        freeBlocksCount = diskSize;
+        document.getElementById('fileName').value = "video.mp4";
+        updatePerformanceMetrics("-", "Disk Reset", "-", "-", "-", "-");
+        updateDirectoryUI();
+        initGrid();
+    }
+
+    function executeSimulation() {
+        const fileName = document.getElementById('fileName').value.trim();
+        const fileSize = parseInt(document.getElementById('fileSize').value);
+        const method = document.querySelector('input[name="method"]:checked').value;
+        
+        if (!fileName || fileSize <= 0 || isNaN(fileSize)) {
+            alert("Model rejected: Empty file names or non-positive sizes.");
+            updatePerformanceMetrics(method, "Rejected (Invalid Input)", "-", "-", "-", "-");
+            return;
+        }
+        if (allocatedFiles[fileName]) {
+            alert("Model rejected: Duplicate file name.");
+            updatePerformanceMetrics(method, "Rejected (Duplicate File)", "-", "-", "-", "-");
+            return;
+        }
+
+        if (method === "Contiguous") {
+            allocateContiguous(fileName, fileSize, method);
+        } else {
+            allocateIndexed(fileName, fileSize, method);
+        }
+    }
+
+    function allocateContiguous(fileName, size, method) {
+        let startIndex = -1;
+        let count = 0;
+
+        for (let i = 0; i < diskSize; i++) {
+            if (disk[i] === null) {
+                if (count === 0) startIndex = i;
+                count++;
+                if (count === size) break;
+            } else {
+                count = 0; 
+            }
+        }
+
+        if (count === size) {
+            for (let i = startIndex; i < startIndex + size; i++) {
+                disk[i] = fileName;
+                document.getElementById('block-' + i).className = 'block contiguous';
+            }
+            
+            let blockStr = `${startIndex}-${startIndex + size - 1}`;
+            allocatedFiles[fileName] = { method: 'Contiguous', blocks: blockStr, size: size };
+            freeBlocksCount -= size;
+            
+            // Update UI with contiguous performance characteristics
+            updatePerformanceMetrics("Contiguous", "Allocated", blockStr, "High (External)", "Very Low", "Very Fast");
+            updateDirectoryUI();
+            incrementFileName(fileName);
+        } else {
+            alert("Model rejected: Insufficient contiguous space. (External Fragmentation)");
+            updatePerformanceMetrics("Contiguous", "Rejected (Fragmentation)", "-", "High (External)", "-", "-");
+        }
+    }
+
+    function allocateIndexed(fileName, size, method) {
+        if (size + 1 > freeBlocksCount) {
+            alert("Model rejected: Insufficient space for Data + Index block.");
+            updatePerformanceMetrics("Indexed", "Rejected (No Space)", "-", "-", "-", "-");
+            return;
+        }
+
+        let freeBlocks = [];
+        for (let i = 0; i < diskSize; i++) {
+            if (disk[i] === null) freeBlocks.push(i);
+        }
+
+        let indexBlock = freeBlocks[0];
+        disk[indexBlock] = fileName + ' (Index)';
+        document.getElementById('block-' + indexBlock).className = 'block index';
+
+        let dataBlocks = [];
+        for (let i = 1; i <= size; i++) {
+            let blockNum = freeBlocks[i];
+            disk[blockNum] = fileName;
+            document.getElementById('block-' + blockNum).className = 'block indexed-data';
+            dataBlocks.push(blockNum);
+        }
+
+        let blockStr = `Data: ${dataBlocks.join(', ')} | Index: ${indexBlock}`;
+        allocatedFiles[fileName] = { method: 'Indexed', blocks: blockStr, size: size + 1 };
+        freeBlocksCount -= (size + 1);
+        
+        // Update UI with indexed performance characteristics
+        updatePerformanceMetrics("Indexed", "Allocated", blockStr, "Zero", "High for small files", "Moderate");
+        updateDirectoryUI();
+        incrementFileName(fileName);
+    }
+
+    function deleteFile(fileName) {
+        if (!allocatedFiles[fileName]) return;
+
+        for (let i = 0; i < diskSize; i++) {
+            if (disk[i] === fileName || disk[i] === fileName + ' (Index)') {
+                disk[i] = null; 
+                document.getElementById('block-' + i).className = 'block free'; 
+            }
+        }
+
+        freeBlocksCount += allocatedFiles[fileName].size;
+        delete allocatedFiles[fileName];
+        
+        updatePerformanceMetrics("-", `${fileName} Deleted`, "-", "-", "-", "-");
+        updateDirectoryUI();
+    }
+
+    function updatePerformanceMetrics(method, status, blocks, frag, overhead, access) {
+        document.getElementById('perf-method').innerText = "Method: " + method;
+        document.getElementById('perf-status').innerText = "Status: " + status;
+        document.getElementById('perf-blocks').innerText = "Blocks: " + blocks;
+        document.getElementById('perf-free').innerText = "Free Blocks: " + freeBlocksCount;
+        document.getElementById('perf-frag').innerText = "Fragmentation: " + frag;
+        document.getElementById('perf-overhead').innerText = "Overhead: " + overhead;
+        document.getElementById('perf-access').innerText = "Access: " + access;
+    }
+
+    function updateDirectoryUI() {
+        document.getElementById('perf-free').innerText = "Free Blocks: " + freeBlocksCount;
+        const dirContainer = document.getElementById('system-directory');
+        dirContainer.innerHTML = '';
+        
+        const fileNames = Object.keys(allocatedFiles);
+        if (fileNames.length === 0) {
+            dirContainer.innerHTML = '<div style="color: #888; padding: 5px;">No files allocated yet.</div>';
+            return;
+        }
+
+        fileNames.forEach(file => {
+            const data = allocatedFiles[file];
+            const entry = document.createElement('div');
+            entry.className = 'dir-entry';
+            entry.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <strong>${file}</strong> <span style="color: #555;">(${data.method})</span><br>
+                        <span style="font-size: 11px; color: #666;">Blocks: ${data.blocks}</span>
+                    </div>
+                    <button class="btn-delete" onclick="deleteFile('${file}')">Delete</button>
+                </div>
+            `;
+            dirContainer.appendChild(entry);
+        });
+    }
+
+    function incrementFileName(currentName) {
+        const match = currentName.match(/^(.*?)(\d+)(\.[^.]+)$/);
+        if (match) {
+            const nextNum = parseInt(match[2]) + 1;
+            document.getElementById('fileName').value = match[1] + nextNum + match[3];
+        }
+    }
+
+    window.onload = initGrid;
+</script>
+</body>
+</html>
